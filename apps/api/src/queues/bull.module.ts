@@ -38,10 +38,10 @@ function parseRedisUrl(url: string) {
           // конфиг для bull v3
           redis,
           defaultJobOptions: {
-            removeOnComplete: true,
-            removeOnFail: 1000,
-            attempts: 2,
-            backoff: { type: 'fixed', delay: 1000 },
+            removeOnComplete: 1000,
+            removeOnFail: 500,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 3000 },
           },
           prefix: 'bull',
         };

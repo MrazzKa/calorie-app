@@ -18,6 +18,8 @@ import { FoodService } from './food.service';
 import { JwtService } from '../jwt/jwt.service';
 import { MediaService } from '../media/media.service';
 import { ConfigService } from '@nestjs/config';
+import { Inject } from '@nestjs/common';
+import type Redis from 'ioredis';
 
 class CreateMealDto {
   @IsString()
@@ -48,6 +50,7 @@ export class MealsController {
     private readonly jwt: JwtService,
     private readonly mediaService: MediaService,
     private readonly configService: ConfigService,
+    @Inject('REDIS') private readonly redis: Redis,
   ) {}
 
   private async extractClaims(authz?: string): Promise<{ sub: string }> {
@@ -134,6 +137,12 @@ export class MealsController {
     // Create meal using existing food service
     const meal = await this.food.createMeal({ userId: sub, assetId: body.assetId });
 
+    // Increment daily photo count
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const limitKey = `lim:photo:${sub}:${today}`;
+    await this.redis.incr(limitKey);
+    await this.redis.expire(limitKey, 86400); // 24 hours
+
     if (analyzeMode === 'sync') {
       // Run analysis synchronously (placeholder for now)
       return {
@@ -160,25 +169,66 @@ export class MealsController {
   ) {
     const { sub } = await this.extractClaims(authz);
     
-    // This would need to be implemented in the food service
-    // For now, return a placeholder response
+    // Get the meal
+    const meal = await this.food.getMeal({ userId: sub, mealId: id });
+    if (!meal) {
+      throw new BadRequestException(`Meal ${id} not found`);
+    }
+
+    // Find the item to adjust
+    const item = meal.items.find(i => i.id === body.itemId);
+    if (!item) {
+      throw new BadRequestException(`Item ${body.itemId} not found`);
+    }
+
+    // Update item grams
+    const newGramsMean = Math.max(0, (item.gramsMean || 0) + body.gramsDelta);
+    const newGramsMin = Math.max(0, (item.gramsMin || 0) + body.gramsDelta);
+    const newGramsMax = Math.max(0, (item.gramsMax || 0) + body.gramsDelta);
+
+    // Update the item
+    await this.food.updateMeal({
+      userId: sub,
+      mealId: id,
+      items: [
+        ...meal.items.filter(i => i.id !== body.itemId),
+        {
+          ...item,
+          gramsMean: newGramsMean,
+          gramsMin: newGramsMin,
+          gramsMax: newGramsMax,
+          // Recalculate nutrition if we have canonical data
+          kcal: item.canonicalId ? Math.round((item.kcal || 0) * (newGramsMean / (item.gramsMean || 1))) : item.kcal,
+          protein: item.canonicalId ? Math.round((item.protein || 0) * (newGramsMean / (item.gramsMean || 1)) * 10) / 10 : item.protein,
+          fat: item.canonicalId ? Math.round((item.fat || 0) * (newGramsMean / (item.gramsMean || 1)) * 10) / 10 : item.fat,
+          carbs: item.canonicalId ? Math.round((item.carbs || 0) * (newGramsMean / (item.gramsMean || 1)) * 10) / 10 : item.carbs,
+        },
+      ],
+    });
+
+    // Recompute meal totals
+    await this.food.recomputeMealTotals(id, sub);
+
     return {
-      message: 'Adjustment not yet implemented',
+      message: 'Adjustment completed',
       mealId: id,
       itemId: body.itemId,
       gramsDelta: body.gramsDelta,
+      newGramsMean,
     };
   }
 
   private async getDailyPhotoCount(userId: string): Promise<number> {
-    // This would need to be implemented with Redis
-    // For now, return 0 to avoid blocking
-    return 0;
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const limitKey = `lim:photo:${userId}:${today}`;
+    const count = await this.redis.get(limitKey);
+    return parseInt(count || '0', 10);
   }
 
   private async enqueueAnalysis(mealId: string): Promise<void> {
-    // This would need to be implemented with the queue
-    // For now, just log
-    console.log(`Would enqueue analysis for meal ${mealId}`);
+    const queueName = this.configService.get<string>('FOOD_QUEUE') || 'food:analyze';
+    
+    // TODO: Implement actual queue enqueueing when BullMQ is properly configured
+    console.log(`Would enqueue analysis for meal ${mealId} to queue ${queueName}`);
   }
 }

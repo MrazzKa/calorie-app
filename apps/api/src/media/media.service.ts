@@ -13,6 +13,7 @@ const ALLOWED_IMAGE_TYPES = [
   'image/png',
   'image/webp',
   'image/heic',
+  'image/gif',
 ];
 
 @Injectable()
