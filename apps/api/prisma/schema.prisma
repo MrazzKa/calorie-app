@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model MediaAsset {
+  id      String @id @default(cuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  s3Key String
+  mime  String
+
+  size   Int?
+  width  Int?
+  height Int?
+  sha256 String?
+
+  createdAt DateTime @default(now())
+
+  meals     Meal[]        @relation("MealAsset")
+  profileOf UserProfile[] @relation("ProfilePhoto")
+
+  @@index([ownerId, createdAt])
+}
+
+enum MealStatus {
+  pending
+  processing
+  ready
+  failed
+}
+
+model Meal {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  assetId String?
+  asset   MediaAsset? @relation("MealAsset", fields: [assetId], references: [id])
+
+  status      MealStatus @default(pending)
+  kcalMin     Float?
+  kcalMax     Float?
+  kcalMean    Float?
+  confidence  Float?
+  methodBadge String?
+  whyJson     Json?
+  createdAt   DateTime   @default(now())
+  items       MealItem[]
+
+  @@index([userId, createdAt])
+  @@index([assetId])
+}
+
+model MealItem {
+  id     String @id @default(cuid())
+  mealId String
+  meal   Meal   @relation(fields: [mealId], references: [id])
+
+  label     String
+  gramsMin  Float?
+  gramsMax  Float?
+  gramsMean Float?
+  kcal      Float?
+  protein   Float?
+  fat       Float?
+  carbs     Float?
+  source    String?
+
+  canonicalId String?
+  canonical   FoodCanonical? @relation(fields: [canonicalId], references: [id])
+
+  @@index([mealId])
+  @@index([canonicalId])
+}
+
+model FoodCanonical {
+  id             String  @id @default(cuid())
+  name           String  @unique
+  kcalPer100g    Float
+  proteinPer100g Float
+  fatPer100g     Float
+  carbsPer100g   Float
+  source         String?
+
+  mealItems MealItem[]
+  nutrients Nutrient[]
+}
+
+model Nutrient {
+  id     String        @id @default(cuid())
+  foodId String
+  food   FoodCanonical @relation(fields: [foodId], references: [id])
+
+  kcal    Float
+  protein Float
+  fat     Float
+  carbs   Float
+  unit    String
+
+  @@index([foodId])
+  @@unique([foodId, unit])
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  role      String   @default("free")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  mediaAssets MediaAsset[]
+  meals       Meal[]
+  sessions    Session[]
+
+  deletedReason String?
+  deletedAt     DateTime?
+
+  profile UserProfile?
+}
+
+model Session {
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId      String
+  jti           String        @unique
+  refreshHash   String
+  userAgent     String?
+  ip            String?
+  ua            String?
+  status        SessionStatus @default(active)
+  lastRotatedAt DateTime      @default(now())
+  expiresAt     DateTime
+  createdAt     DateTime      @default(now())
+  closedAt      DateTime?
+
+  @@index([userId, deviceId])
+}
+
+enum SessionStatus {
+  active
+  rotated
+  revoked
+  expired
+}
+
+enum Sex {
+  male
+  female
+  other
+}
+
+model UserProfile {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name String?
+  age  Int?
+  sex  Sex?
+
+  photoId String?
+  photo   MediaAsset? @relation("ProfilePhoto", fields: [photoId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([photoId])
+}

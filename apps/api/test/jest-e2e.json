@@ -1,0 +1,16 @@
+{
+  "rootDir": "../",
+  "testMatch": ["<rootDir>/test/**/*.e2e-spec.ts"],
+  "testEnvironment": "node",
+  "setupFiles": ["dotenv/config"],
+  "moduleFileExtensions": ["ts", "js", "json"],
+  "transform": {
+    "^.+\\.(t|j)s$": ["@swc/jest", {
+      "jsc": { "target": "es2022", "parser": { "syntax": "typescript", "decorators": true } },
+      "module": { "type": "commonjs" }
+    }]
+  },
+  "transformIgnorePatterns": ["/node_modules/"],
+  "verbose": true,
+  "testTimeout": 30000
+}

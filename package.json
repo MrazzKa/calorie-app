@@ -1,0 +1,42 @@
+{
+  "name": "caloriecam",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.17.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier -w .",
+    "prepare": "husky install"
+  },
+  "lint-staged": {
+    "*.{ts,js,json,md,yml,yaml}": "prettier -w",
+    "*.{ts,js}": "eslint --fix"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.13.5",
+    "@swc/jest": "^0.2.39",
+    "@types/node": "^24.5.2",
+    "@typescript-eslint/eslint-plugin": "^8.44.1",
+    "@typescript-eslint/parser": "^8.44.1",
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.1",
+    "prettier": "^3.6.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "jose": "^5.10.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "jose": "5.10.0"
+    }
+  }
+}

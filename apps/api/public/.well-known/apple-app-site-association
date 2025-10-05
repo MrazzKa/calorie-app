@@ -1,0 +1,22 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "TEAMID.com.caloriecam.app"
+        ],
+        "components": [
+          {
+            "/": "/v1/auth/magic-exchange*",
+            "comment": "Magic link authentication"
+          }
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": [
+      "TEAMID.com.caloriecam.app"
+    ]
+  }
+}
