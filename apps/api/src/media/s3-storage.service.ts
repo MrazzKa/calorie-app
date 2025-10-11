@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Readable } from 'stream';
+import { Readable } from 'node:stream';
 import type { IStorage } from './storage.interface';
 
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
@@ -25,15 +25,15 @@ export class S3StorageService implements IStorage {
     this.region = this.configService.get<string>('S3_REGION') || 'us-east-1';
     
     const endpoint = this.configService.get<string>('S3_ENDPOINT');
-    const usePathStyle = this.configService.get<string>('S3_USE_PATH_STYLE') === 'true';
+    const usePathStyle = this.configService.get<string>('S3_FORCE_PATH_STYLE') === 'true';
     
     this.s3Client = new S3Client({
       endpoint: endpoint || undefined,
       region: this.region,
       forcePathStyle: usePathStyle,
       credentials: {
-        accessKeyId: this.configService.get<string>('S3_ACCESS_KEY')!,
-        secretAccessKey: this.configService.get<string>('S3_SECRET_KEY')!,
+        accessKeyId: this.configService.get<string>('S3_ACCESS_KEY_ID')!,
+        secretAccessKey: this.configService.get<string>('S3_SECRET_ACCESS_KEY')!,
       },
     });
   }
@@ -122,16 +122,24 @@ export class S3StorageService implements IStorage {
     key: string,
     contentType: string,
     expiresIn: number = 3600,
+    maxSizeBytes?: number,
   ): Promise<string> {
     try {
-      const command = new PutObjectCommand({
+      const commandInput: any = {
         Bucket: this.bucket,
         Key: key,
         ContentType: contentType,
-      });
+      };
+
+      // Add content length restriction if specified
+      if (maxSizeBytes !== undefined) {
+        commandInput.ContentLength = maxSizeBytes;
+      }
+
+      const command = new PutObjectCommand(commandInput);
       
       const url = await getSignedUrl(this.s3Client, command, { expiresIn });
-      this.logger.debug(`Generated presigned upload URL for: ${key}`);
+      this.logger.debug(`Generated presigned upload URL for: ${key} (max size: ${maxSizeBytes || 'unlimited'} bytes)`);
       return url;
     } catch (error) {
       this.logger.error(`Failed to generate presigned upload URL for: ${key}`, error);

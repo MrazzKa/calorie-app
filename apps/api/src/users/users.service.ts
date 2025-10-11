@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 import { SessionsService } from '../sessions/sessions.service';
 
 @Injectable()
@@ -8,7 +9,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessions: SessionsService,
-    @Inject('REDIS') private readonly redis: Redis,
+    @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
   // уже был

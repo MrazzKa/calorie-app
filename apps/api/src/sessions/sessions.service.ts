@@ -8,7 +8,6 @@ export class SessionsService {
   constructor(private prisma: PrismaService) {}
 
   async createOrRotate(args: { userId: string; role: string; deviceId: string; ip?: string; ua?: string; redis: Redis }) {
-    // помечаем предыдущую активную на этом устройстве как rotated и кидаем её jti в blacklist
     const prev = await this.prisma.session.findFirst({ where: { userId: args.userId, deviceId: args.deviceId, status: 'active' } });
     if (prev) {
       await this.prisma.session.update({ where: { id: prev.id }, data: { status: 'rotated', lastRotatedAt: new Date() } });
@@ -29,7 +28,6 @@ export class SessionsService {
   }
 
   async rotateByJti(args: { jti: string; redis: Redis }) {
-    // Запрещённый/уже использованный refresh
     if (await args.redis.get(`blacklist:${args.jti}`)) throw new UnauthorizedException('revoked');
 
     const sess = await this.prisma.session.findUnique({ where: { jti: args.jti } });
@@ -39,7 +37,6 @@ export class SessionsService {
 
     const newJti = randomId();
     const ttlSec = Math.max(1, Math.floor((+sess.expiresAt - Date.now()) / 1000));
-    // Старый jti — в blacklist до конца жизни refresh
     await args.redis.setex(`blacklist:${sess.jti}`, ttlSec, '1');
 
     await this.prisma.session.update({
@@ -53,7 +50,7 @@ export class SessionsService {
 
   async revokeOne(jti: string, redis: Redis) {
     const sess = await this.prisma.session.findUnique({ where: { jti } });
-    if (!sess) return; // идемпотентность
+    if (!sess) return;
     if (sess.status !== 'revoked') {
       await this.prisma.session.update({ where: { jti }, data: { status: 'revoked' } });
     }

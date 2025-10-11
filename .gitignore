@@ -7,6 +7,7 @@ apps/api/jwt-public.pem
 # local data
 apps/api/data/usda/*.csv
 apps/api/data/usda/*.zip
+pgdata/
 
 # build/deps
 dist

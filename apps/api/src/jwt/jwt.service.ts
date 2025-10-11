@@ -10,6 +10,7 @@ import {
   exportJWK,
   JWK,
   KeyLike,
+  generateKeyPair,
 } from 'jose';
 import * as fs from 'node:fs';
 
@@ -36,7 +37,7 @@ export class JwtService {
   private alg = (process.env.JWT_ALG as 'EdDSA' | 'RS256') || 'EdDSA';
   private issuer = process.env.JWT_ISSUER || 'caloriecam';
   private kid = process.env.JWT_KEY_ID || 'main-k1';
-  private accessTtl = +(process.env.JWT_ACCESS_TTL_SEC || 900);
+  private accessTtl = +(process.env.JWT_ACCESS_TTL_SEC || 1800);
   private refreshTtl = +(process.env.JWT_REFRESH_TTL_SEC || 2592000);
 
   private privateKey!: KeyLike;
@@ -58,6 +59,17 @@ export class JwtService {
     const pubRaw  = pubFromFile  ?? pubFromB64  ?? process.env.JWT_PUBLIC_KEY;
 
     if (!privRaw || !pubRaw) {
+      // note: generate ephemeral keys in non-production
+      if (process.env.NODE_ENV !== 'production') {
+        const { privateKey, publicKey } = await generateKeyPair(this.alg);
+        this.privateKey = privateKey as KeyLike;
+        this.publicKey = publicKey as KeyLike;
+        this.publicJwk = await exportJWK(this.publicKey);
+        this.publicJwk.kid = this.kid;
+        this.publicJwk.alg = this.alg;
+        this.publicJwk.use = 'sig';
+        return;
+      }
       throw new Error('JWT keys are not provided (set *_FILE or *_BASE64 or plain PEM variables)');
     }
 
@@ -132,6 +144,7 @@ export class JwtService {
   genJti() {
     return randomBytes(16).toString('hex');
   }
+  
   hashMagicToken(t: string) {
     return createHash('sha256').update(t).digest('hex');
   }

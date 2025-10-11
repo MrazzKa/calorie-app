@@ -9,7 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
-  PaymentRequiredException,
+  HttpException,
   NotFoundException,
 } from '@nestjs/common';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, Min } from 'class-validator';
@@ -55,12 +55,7 @@ export class MealsController {
       const limit = this.configService.get<number>('FREE_DAILY_PHOTO_LIMIT') || 5;
       
       if (dailyCount >= limit) {
-        throw new PaymentRequiredException({
-          code: 'limit_exceeded',
-          message: `Daily photo limit of ${limit} exceeded`,
-          dailyCount,
-          limit,
-        });
+        throw new HttpException({ code: 'limit_exceeded' }, HttpStatus.PAYMENT_REQUIRED);
       }
     }
 

@@ -13,4 +13,4 @@ export interface LabelerProvider {
   extractLabels(image: Buffer): Promise<VisionLabel[]>;
 }
 
-export const LABELER_PROVIDER = 'LABELER_PROVIDER' as const;
+export const LABELER_PROVIDER = Symbol('LABELER_PROVIDER');

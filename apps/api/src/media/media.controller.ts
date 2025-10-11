@@ -70,11 +70,11 @@ export class MediaController {
   }
 
   // Important trick: wildcard for keys with slashes (local/<uuid>.ext)
-  @Get('*')
+  @Get('*path')
   @Header('Cache-Control', 'public, max-age=31536000, immutable')
   async serve(@Req() req: Request, @Res() res: Response) {
-    // Express puts * in params[0]
-    const key = decodeURIComponent((req.params as any)[0] || '').replace(/^\//, '');
+    // Express puts wildcard in named param
+    const key = decodeURIComponent(((req.params as any).path || '')).replace(/^\//, '');
     if (!key) throw new NotFoundException();
 
     if (!(await this.storage.exists(key))) throw new NotFoundException();

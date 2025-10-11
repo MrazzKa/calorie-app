@@ -9,8 +9,28 @@ import { NutrientResolver, type Canonical } from './rag/nutrient-resolver';
 import { NutritionComposer } from './compose/nutrition-composer';
 import { METHOD_BADGE } from '../common/constants/method-badge';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 import { createHash } from 'crypto';
-import type { MealItem, Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import { createId } from '@paralleldrive/cuid2';
+
+interface ComputedItem {
+  label: string;
+  gramsMin?: number;
+  gramsMax?: number;
+  gramsMean: number;
+  kcal?: number | null;
+  protein?: number | null;
+  fat?: number | null;
+  carbs?: number | null;
+  canonicalId?: string | null;
+  per100g: {
+    kcalPer100g: number;
+    proteinPer100g: number;
+    fatPer100g: number;
+    carbsPer100g: number;
+  };
+}
 
 export interface WhyEntry {
   label: string;
@@ -44,7 +64,7 @@ export class FoodAnalyzerService {
     private readonly nutrientResolver: NutrientResolver,
     private readonly nutritionComposer: NutritionComposer,
     @Inject(LABELER_PROVIDER) private readonly labeler: LabelerProvider,
-    @Inject('REDIS') private readonly redis: Redis,
+    @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
   async analyze(mealId: string, assetId: string): Promise<{
@@ -56,6 +76,68 @@ export class FoodAnalyzerService {
     
     try {
       this.logger.log(`Starting analysis for meal ${mealId}`);
+
+      // Check if using demo provider - return static demo result
+      const analyzerProvider = this.configService.get<string>('ANALYZER_PROVIDER') || 'demo';
+      if (analyzerProvider === 'demo') {
+        this.logger.log(`Using demo provider for meal ${mealId}`);
+        
+        const demoResult = {
+          status: 'ready' as const,
+          summary: {
+            kcalMean: 80,
+            confidence: 0.95,
+            methodBadge: 'demo'
+          },
+          items: [{
+            label: 'apple',
+            portion: { gramsMean: 150, gramsMin: 140, gramsMax: 160 },
+            matched: {
+              id: 'demo-apple-id',
+              name: 'Apple, raw',
+              source: 'demo',
+              score: 0.95
+            },
+            per100g: {
+              kcal: 52,
+              protein: 0.3,
+              fat: 0.2,
+              carbs: 14
+            },
+            method: 'd2' as const,
+            cache: false
+          }] as WhyEntry[]
+        };
+
+        // Update meal with demo results
+        await this.prisma.meal.update({
+          where: { id: mealId },
+          data: {
+            status: 'ready',
+            kcalMean: demoResult.summary.kcalMean,
+            confidence: demoResult.summary.confidence,
+            methodBadge: demoResult.summary.methodBadge,
+            whyJson: demoResult.items as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        // Create demo meal item
+        await this.prisma.mealItem.create({
+          data: {
+            mealId,
+            label: 'apple',
+            gramsMean: 150,
+            kcal: 80,
+            protein: 0.45,
+            fat: 0.3,
+            carbs: 21,
+            source: 'demo',
+            canonicalId: 'demo-apple-id',
+          },
+        });
+
+        return demoResult;
+      }
 
       // Get the meal and asset
       const meal = await this.prisma.meal.findUnique({
@@ -80,7 +162,9 @@ export class FoodAnalyzerService {
       if (cached) {
         this.logger.log(`Using cached analysis for meal ${mealId}`);
         await this.applyCachedAnalysis(mealId, cached);
-        return { status: 'ready', summary: cached.summary, items: cached.items };
+        // Map why entries to include cache:true for cached results
+        const cachedItemsWithCache = cached.items.map((item: any) => ({ ...item, cache: true }));
+        return { status: 'ready', summary: cached.summary, items: cachedItemsWithCache };
       }
 
       // Extract labels
@@ -95,9 +179,9 @@ export class FoodAnalyzerService {
       const portions = await this.portionEstimator.estimate(imageBuffer, labels);
       this.logger.debug(`Estimated portions for ${Object.keys(portions).length} items`);
 
-      // Resolve nutrient data and create meal items
+      // Resolve nutrient data and compute items
       const whyEntries: WhyEntry[] = [];
-      const mealItems: MealItem[] = [];
+      const computedItems: ComputedItem[] = [];
 
       for (const label of labels) {
         const portion = portions[label.name];
@@ -110,31 +194,31 @@ export class FoodAnalyzerService {
         const canonical = await this.nutrientResolver.resolve(label.name);
         
         // Compute nutrition
-        const nutrition = this.nutritionComposer.computeItem(portion.gramsMean, {
+        const gramsMeanNumber = Math.max(0, Math.round(portion.gramsMean ?? 0));
+        const nutrition = this.nutritionComposer.computeItem(gramsMeanNumber, {
           kcalPer100g: canonical.kcalPer100g,
           proteinPer100g: canonical.proteinPer100g,
           fatPer100g: canonical.fatPer100g,
           carbsPer100g: canonical.carbsPer100g,
         });
 
-        // Create meal item
-        const mealItem = await this.prisma.mealItem.create({
-          data: {
-            mealId,
-            label: label.name,
-            gramsMin: portion.gramsMin,
-            gramsMax: portion.gramsMax,
-            gramsMean: portion.gramsMean,
-            kcal: nutrition.kcal,
-            protein: nutrition.protein,
-            fat: nutrition.fat,
-            carbs: nutrition.carbs,
-            source: canonical.source,
-            canonicalId: canonical.id,
+        computedItems.push({
+          label: label.name,
+          gramsMin: portion.gramsMin,
+          gramsMax: portion.gramsMax,
+          gramsMean: gramsMeanNumber,
+          kcal: nutrition.kcal,
+          protein: nutrition.protein,
+          fat: nutrition.fat,
+          carbs: nutrition.carbs,
+          canonicalId: canonical.id,
+          per100g: {
+            kcalPer100g: canonical.kcalPer100g,
+            proteinPer100g: canonical.proteinPer100g,
+            fatPer100g: canonical.fatPer100g,
+            carbsPer100g: canonical.carbsPer100g,
           },
         });
-
-        mealItems.push(mealItem);
 
         // Create why entry
         const whyEntry: WhyEntry = {
@@ -159,20 +243,33 @@ export class FoodAnalyzerService {
         whyEntries.push(whyEntry);
       }
 
-      // Compute meal summary
-      const summary = this.nutritionComposer.computeMealSummary(
-        mealItems.map(item => ({
-          gramsMin: item.gramsMin || undefined,
-          gramsMax: item.gramsMax || undefined,
-          gramsMean: item.gramsMean,
-          per100g: {
-            kcalPer100g: item.kcal || 0,
-            proteinPer100g: item.protein || 0,
-            fatPer100g: item.fat || 0,
-            carbsPer100g: item.carbs || 0,
-          },
-        }))
-      );
+      // Persist meal items in batch
+      const toCreate: Prisma.MealItemUncheckedCreateInput[] = computedItems.map((ci) => ({
+        id: createId(),
+        mealId,
+        label: ci.label,
+        gramsMin: ci.gramsMin ?? null,
+        gramsMax: ci.gramsMax ?? null,
+        gramsMean: ci.gramsMean,
+        kcal: ci.kcal ?? null,
+        protein: ci.protein ?? null,
+        fat: ci.fat ?? null,
+        carbs: ci.carbs ?? null,
+        source: 'USDA',
+        canonicalId: ci.canonicalId ?? null,
+      }));
+      if (toCreate.length > 0) {
+        await this.prisma.mealItem.createMany({ data: toCreate });
+      }
+
+      // Compute meal summary using composer input shape
+      const forComposer = computedItems.map((ci) => ({
+        gramsMin: ci.gramsMin ?? undefined,
+        gramsMax: ci.gramsMax ?? undefined,
+        gramsMean: ci.gramsMean,
+        per100g: ci.per100g,
+      }));
+      const summary = this.nutritionComposer.computeMealSummary(forComposer);
 
         // Update meal with results
         await this.prisma.meal.update({
@@ -184,7 +281,7 @@ export class FoodAnalyzerService {
             kcalMean: summary.kcalMean,
             confidence: summary.confidence,
             methodBadge: summary.methodBadge,
-            whyJson: whyEntries as unknown as Prisma.InputJsonValue,
+            whyJson: (whyEntries as unknown) as Prisma.InputJsonValue,
           },
         });
 
@@ -235,7 +332,7 @@ export class FoodAnalyzerService {
   private async applyCachedAnalysis(mealId: string, cached: any): Promise<void> {
     try {
       // Create meal items from cached data
-      const mealItems = [];
+      const mealItems: any[] = [];
       
       for (const item of cached.items) {
         const canonical = await this.prisma.foodCanonical.findUnique({

@@ -1,9 +1,10 @@
 import { Injectable, Inject, HttpException, HttpStatus } from '@nestjs/common';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 
 @Injectable()
 export class RateLimitService {
-  constructor(@Inject('REDIS') private readonly redis: Redis) {}
+  constructor(@Inject(REDIS) private readonly redis: Redis) {}
 
   async rateLimit(
     key: string,
@@ -45,5 +46,19 @@ export class RateLimitService {
       remaining: Math.max(0, limit - current),
       resetTime,
     };
+  }
+
+  // Centralized daily analysis quota check (FREE vs PRO)
+  async assertDailyAnalysisQuota(redis: Redis, userId: string, role: string | undefined, free: number, pro: number) {
+    if (process.env.DISABLE_LIMITS === 'true') return;
+    const isPro = role === 'pro';
+    const limit = isPro ? pro : free;
+    const date = new Date().toISOString().slice(0, 10);
+    const key = `limit:meals:${userId}:${date}`;
+    const cnt = await redis.incr(key);
+    if (cnt === 1) await redis.expire(key, 86400);
+    if (cnt > limit) {
+      throw new HttpException({ code: 'limit_exceeded' }, HttpStatus.PAYMENT_REQUIRED);
+    }
   }
 }

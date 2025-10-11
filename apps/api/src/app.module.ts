@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -19,11 +20,19 @@ import { MediaModule } from './media/media.module';
 import { AssetsModule } from './assets/assets.module';
 
 import { AppBullModule } from './queues/bull.module';
+import { WeightsModule } from './users/weights/weights.module';
+import { GoalsModule } from './users/goals/goals.module';
+import { AdminModule } from './admin/admin.module';
+
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['apps/api/.env', '.env'],
+    }),
     PrismaModule,
     MailerModule,
-    RedisModule,
+    RedisModule.forRoot(),
     JwtModule,
     WellKnownModule,
     AppBullModule,
@@ -32,6 +41,9 @@ import { AppBullModule } from './queues/bull.module';
     FoodModule,
     MediaModule,
     AssetsModule,
+    WeightsModule,
+    GoalsModule,
+    AdminModule,
   ],
   controllers: [AppController, StatsController],
   providers: [AppService],

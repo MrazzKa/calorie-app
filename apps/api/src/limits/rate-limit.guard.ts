@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, ForbiddenException, Inject } from '@nestjs/common';
 import type IORedis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 
@@ -8,7 +9,7 @@ export class DailyPhotoLimitGuard implements CanActivate {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cfg: ConfigService,
-    @Inject('REDIS') private readonly redis: IORedis,
+    @Inject(REDIS) private readonly redis: IORedis,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {

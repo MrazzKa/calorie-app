@@ -8,6 +8,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -19,7 +20,9 @@ import { JwtService } from '../jwt/jwt.service';
 import { MediaService } from '../media/media.service';
 import { ConfigService } from '@nestjs/config';
 import { Inject } from '@nestjs/common';
+import { PrismaService } from '../prisma.service';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 
 class CreateMealDto {
   @IsString()
@@ -50,7 +53,8 @@ export class MealsController {
     private readonly jwt: JwtService,
     private readonly mediaService: MediaService,
     private readonly configService: ConfigService,
-    @Inject('REDIS') private readonly redis: Redis,
+    @Inject(REDIS) private readonly redis: Redis,
+    private readonly prisma: PrismaService,
   ) {}
 
   private async extractClaims(authz?: string): Promise<{ sub: string }> {
@@ -70,8 +74,15 @@ export class MealsController {
   }
 
   @Get()
-  async list(@Headers('authorization') authz?: string, @Query('take') take?: string) {
+  async list(
+    @Headers('authorization') authz?: string,
+    @Query('take') take?: string,
+    @Query('date') date?: string,
+  ) {
     const { sub } = await this.extractClaims(authz);
+    if (date) {
+      return await (this.food as any).listMealsByDate({ userId: sub, date });
+    }
     const n = take ? Number(take) : undefined;
     return await this.food.listMeals({ userId: sub, take: isFinite(n as number) ? n : undefined });
   }
@@ -115,49 +126,41 @@ export class MealsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async createMeal(
-    @Body() body: CreateMealDto,
+    @Body() body: CreateMealDto | { items?: Array<{ label: string; grams?: number | null; kcal?: number | null; protein?: number | null; fat?: number | null; carbs?: number | null; canonicalId?: string | null }>; createdAt?: string },
     @Headers('authorization') authz?: string,
   ) {
     const { sub } = await this.extractClaims(authz);
     const analyzeMode = this.configService.get<string>('ANALYZE_MODE') || 'async';
-    
-    // Check daily limits for free users
-    const dailyCount = await this.getDailyPhotoCount(sub);
-    const limit = this.configService.get<number>('FREE_DAILY_PHOTO_LIMIT') || 5;
-    
-    if (dailyCount >= limit) {
-      throw new HttpException({
-        code: 'limit_exceeded',
-        message: `Daily photo limit of ${limit} exceeded`,
-        dailyCount,
-        limit,
-      }, HttpStatus.PAYMENT_REQUIRED);
+
+    // DAILY LIMIT 402 - disabled if DISABLE_LIMITS=true
+    const disableLimits = process.env.DISABLE_LIMITS === 'true';
+    if (!disableLimits) {
+      const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+      const limitKey = `lim:photo:${sub}:${today}`;
+      const newCount = await this.redis.incr(limitKey);
+      await this.redis.expire(limitKey, 86400);
+      const freeLimit = this.configService.get<number>('FREE_DAILY_PHOTO_LIMIT') || 5;
+      const role = this.configService.get<string>('DEFAULT_ROLE') || 'free';
+      if (role === 'free' && newCount > freeLimit) {
+        throw new HttpException({ code: 'limit_exceeded' }, HttpStatus.PAYMENT_REQUIRED);
+      }
     }
 
-    // Create meal using existing food service
-    const meal = await this.food.createMeal({ userId: sub, assetId: body.assetId });
+    // Manual meal create path (no assetId provided)
+    if (!(body as any).assetId && Array.isArray((body as any).items)) {
+      const createdAt = (body as any).createdAt ? new Date((body as any).createdAt + 'T00:00:00.000Z') : undefined;
+      const res = await (this.food as any).createManualMeal({ userId: sub, items: (body as any).items, createdAt });
+      return { mealId: res.mealId, status: 'ready', items: (body as any).items };
+    }
 
-    // Increment daily photo count
-    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const limitKey = `lim:photo:${sub}:${today}`;
-    await this.redis.incr(limitKey);
-    await this.redis.expire(limitKey, 86400); // 24 hours
+    // Photo-based meal
+    const meal = await this.food.createMeal({ userId: sub, assetId: (body as any).assetId });
 
     if (analyzeMode === 'sync') {
-      // Run analysis synchronously (placeholder for now)
-      return {
-        ...meal,
-        status: 'ready',
-        message: 'Sync analysis not yet implemented',
-      };
+      return { ...meal, status: 'ready' } as any;
     } else {
-      // Enqueue for async analysis
       await this.enqueueAnalysis(meal.id);
-      return {
-        ...meal,
-        status: 'pending',
-        message: 'Analysis queued',
-      };
+      return { ...meal, status: 'pending' } as any;
     }
   }
 
@@ -168,53 +171,51 @@ export class MealsController {
     @Headers('authorization') authz?: string,
   ) {
     const { sub } = await this.extractClaims(authz);
-    
-    // Get the meal
-    const meal = await this.food.getMeal({ userId: sub, mealId: id });
-    if (!meal) {
-      throw new BadRequestException(`Meal ${id} not found`);
-    }
+    const mealId = id;
 
-    // Find the item to adjust
-    const item = meal.items.find(i => i.id === body.itemId);
-    if (!item) {
-      throw new BadRequestException(`Item ${body.itemId} not found`);
-    }
+    const item = await this.prisma.mealItem.findUnique({ where: { id: body.itemId } });
+    if (!item || item.mealId !== mealId) throw new NotFoundException();
 
-    // Update item grams
-    const newGramsMean = Math.max(0, (item.gramsMean || 0) + body.gramsDelta);
-    const newGramsMin = Math.max(0, (item.gramsMin || 0) + body.gramsDelta);
-    const newGramsMax = Math.max(0, (item.gramsMax || 0) + body.gramsDelta);
+    const newMean = Math.max(0, (item.gramsMean ?? 0) + body.gramsDelta);
+    const newMin  = Math.max(0, item.gramsMin ?? newMean);
+    const newMax  = Math.max(newMean, item.gramsMax ?? newMean);
 
-    // Update the item
-    await this.food.updateMeal({
-      userId: sub,
-      mealId: id,
-      items: [
-        ...meal.items.filter(i => i.id !== body.itemId),
-        {
-          ...item,
-          gramsMean: newGramsMean,
-          gramsMin: newGramsMin,
-          gramsMax: newGramsMax,
-          // Recalculate nutrition if we have canonical data
-          kcal: item.canonicalId ? Math.round((item.kcal || 0) * (newGramsMean / (item.gramsMean || 1))) : item.kcal,
-          protein: item.canonicalId ? Math.round((item.protein || 0) * (newGramsMean / (item.gramsMean || 1)) * 10) / 10 : item.protein,
-          fat: item.canonicalId ? Math.round((item.fat || 0) * (newGramsMean / (item.gramsMean || 1)) * 10) / 10 : item.fat,
-          carbs: item.canonicalId ? Math.round((item.carbs || 0) * (newGramsMean / (item.gramsMean || 1)) * 10) / 10 : item.carbs,
-        },
-      ],
+    const denom = (item.gramsMean ?? 0) || 1;
+    const ratio = newMean / denom;
+
+    const next = {
+      gramsMean: newMean,
+      gramsMin: newMin,
+      gramsMax: newMax,
+      kcal: item.kcal != null ? Math.round((item.kcal ?? 0) * ratio) : null,
+      protein: item.protein != null ? Math.round(((item.protein ?? 0) * ratio) * 10) / 10 : null,
+      fat: item.fat != null ? Math.round(((item.fat ?? 0) * ratio) * 10) / 10 : null,
+      carbs: item.carbs != null ? Math.round(((item.carbs ?? 0) * ratio) * 10) / 10 : null,
+    } as const;
+
+    await this.prisma.mealItem.update({ where: { id: body.itemId }, data: next });
+
+    const items = await this.prisma.mealItem.findMany({ where: { mealId } });
+    const kcalMean = Math.round(items.reduce((s,i)=>s+(i.kcal ?? 0),0));
+    const kcalMin  = Math.round(kcalMean*0.9);
+    const kcalMax  = Math.round(kcalMean*1.1);
+
+    const prev = await this.prisma.meal.findUnique({ where: { id: mealId } });
+    const whyPrev = (prev?.whyJson as any[]) ?? [];
+    const whyEntry = { method: 'user' };
+
+    await this.prisma.meal.update({
+      where: { id: mealId },
+      data: {
+        kcalMean, kcalMin, kcalMax,
+        whyJson: ([...whyPrev, whyEntry] as unknown) as import('@prisma/client').Prisma.InputJsonValue,
+      },
     });
 
-    // Recompute meal totals
-    await this.food.recomputeMealTotals(id, sub);
-
-    return {
-      message: 'Adjustment completed',
-      mealId: id,
-      itemId: body.itemId,
-      gramsDelta: body.gramsDelta,
-      newGramsMean,
+    return { 
+      ok: true,
+      kcalMean,
+      summary: { kcalMean }
     };
   }
 

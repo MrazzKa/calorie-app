@@ -1,11 +1,13 @@
+// TODO: install @nestjs/bullmq and bullmq packages for queue processing
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectQueue } from '@nestjs/bullmq';
-import type { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bull';
+import type { Queue } from 'bull';
 import { PrismaService } from '../prisma.service';
 import { MediaService } from '../media/media.service';
 import { RateLimitService } from '../common/rate-limit.service';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 import { createHash } from 'crypto';
 
 @Injectable()
@@ -17,7 +19,7 @@ export class MealsService {
     private readonly prisma: PrismaService,
     private readonly mediaService: MediaService,
     private readonly rateLimitService: RateLimitService,
-    @Inject('REDIS') private readonly redis: Redis,
+    @Inject(REDIS) private readonly redis: Redis,
     @InjectQueue('food:analyze') private readonly foodQueue: Queue,
   ) {}
 

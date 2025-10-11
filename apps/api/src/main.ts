@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -7,22 +8,37 @@ import { CorrelationIdInterceptor } from './common/interceptors/correlation.inte
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // 1) Global prefix
   app.setGlobalPrefix('v1', {
-    exclude: ['.well-known', '.well-known/(.*)'], // AASA/assetlinks remain at root
+    exclude: [
+      { path: '/.well-known/*path', method: RequestMethod.ALL },
+    ],
   });
 
-  // 2) Global interceptors
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
+    }),
+  );
+
   app.useGlobalInterceptors(new CorrelationIdInterceptor());
 
-  // 3) CORS, Helmet
   app.enableCors({
-    origin: true,
+    origin: process.env.CORS_ORIGIN || '*',
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'x-correlation-id', 'x-corr-id'],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
-  app.use(helmet({ crossOriginResourcePolicy: false }));
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: false,
+      contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+    }),
+  );
 
   // 4) Swagger
   const config = new DocumentBuilder()

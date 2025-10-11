@@ -3,3 +3,7 @@ node_modules
 .env
 
 /generated/prisma
+
+# USDA CSV data (do not commit large datasets)
+/data/usda/*
+!/data/usda/.keep

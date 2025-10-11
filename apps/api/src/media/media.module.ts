@@ -7,6 +7,7 @@ import { STORAGE } from './tokens';
 import { DiskStorageService } from './disk-storage.service';
 import { PrismaModule } from '../prisma.module';
 import { JwtModule } from '../jwt/jwt.module';
+import { MediaRetentionCron } from './retention.cron';
 
 @Module({
   imports: [ConfigModule, PrismaModule, JwtModule],
@@ -15,6 +16,7 @@ import { JwtModule } from '../jwt/jwt.module';
     MediaService,
     S3StorageService,
     DiskStorageService,
+    MediaRetentionCron,
     {
       provide: STORAGE,
       // Switch storage driver based on environment variable

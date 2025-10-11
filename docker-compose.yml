@@ -1,65 +1,68 @@
-version: '3.9'
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: cc-postgres
+    container_name: caloriecam_postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: caloriecam
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    ports: ['5432:5432']
+      POSTGRES_DB: caloriecam
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./ops/initdb:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d caloriecam']
+      test: ["CMD-SHELL", "pg_isready -U postgres -d caloriecam"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 20
 
   redis:
-    image: redis:7
-    container_name: cc-redis
-    ports: ['6379:6379']
-    command: ['redis-server', '--appendonly', 'yes']
-    volumes:
-      - redisdata:/data
+    image: redis:7-alpine
+    container_name: caloriecam_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 10
 
   minio:
-    image: minio/minio:latest
-    container_name: cc-minio
+    image: quay.io/minio/minio:latest
+    container_name: caloriecam_minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio12345
-    command: server /data --console-address ":9001"
-    ports: ['9000:9000', '9001:9001']
-    volumes:
-      - miniodata:/data
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
-      interval: 10s
-      timeout: 5s
-      retries: 20
-
-  jaeger:
-    image: jaegertracing/all-in-one:1.56
-    container_name: cc-jaeger
     ports:
-      - '16686:16686' # UI
-      - '4317:4317' # OTLP gRPC
-      - '4318:4318' # OTLP HTTP
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
     healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://localhost:16686']
+      test: ["CMD", "mc", "ready", "local"]
       interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 5
+
+  mc:
+    image: quay.io/minio/mc:latest
+    container_name: caloriecam_mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set local http://minio:9000 minio minio12345) do echo 'Waiting for MinIO...' && sleep 1; done;
+      /usr/bin/mc mb -p local/caloriecam-dev || true;
+      /usr/bin/mc anonymous set download local/caloriecam-dev || true;
+      echo 'MinIO bucket caloriecam-dev created and configured';
+      tail -f /dev/null
+      "
 
 volumes:
   pgdata:
-  redisdata:
-  miniodata:
+  minio_data:

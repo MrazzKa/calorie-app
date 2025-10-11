@@ -13,18 +13,12 @@ export interface Portion {
 @Injectable()
 export class PortionEstimator {
   private readonly logger = new Logger(PortionEstimator.name);
-  private readonly openai: OpenAI;
+  private openai?: OpenAI;
+  private readonly apiKey?: string;
 
   constructor(private readonly configService: ConfigService) {
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is required for portion estimation');
-    }
-
-    this.openai = new OpenAI({
-      apiKey,
-      timeout: 20000,
-    });
+    this.apiKey = this.configService.get<string>('OPENAI_API_KEY') || undefined;
+    // Do not throw here; fallback to rules will be used if missing
   }
 
   async estimate(image: Buffer, labels: VisionLabel[]): Promise<Record<string, Portion>> {
@@ -35,6 +29,10 @@ export class PortionEstimator {
     }
 
     try {
+      if (!this.apiKey) {
+        this.logger.warn('OPENAI_API_KEY missing; using rule-based portion estimation');
+        return this.estimateWithRules(labels);
+      }
       return await this.estimateWithLLM(image, labels);
     } catch (error) {
       this.logger.warn(`LLM portion estimation failed, falling back to rules: ${error.message}`);
@@ -50,6 +48,9 @@ export class PortionEstimator {
 
     const base64Image = image.toString('base64');
     
+    if (!this.openai) {
+      this.openai = new OpenAI({ apiKey: this.apiKey as string, timeout: 20000 });
+    }
     const response = await this.openai.chat.completions.create({
       model,
       messages: [

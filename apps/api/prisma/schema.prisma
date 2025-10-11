@@ -18,7 +18,7 @@ model MediaAsset {
   size   Int?
   width  Int?
   height Int?
-  sha256 String?
+  sha256 String? @db.VarChar(64)
 
   createdAt DateTime @default(now())
 
@@ -26,6 +26,7 @@ model MediaAsset {
   profileOf UserProfile[] @relation("ProfilePhoto")
 
   @@index([ownerId, createdAt])
+  @@index([sha256])
 }
 
 enum MealStatus {
@@ -117,6 +118,8 @@ model User {
   mediaAssets MediaAsset[]
   meals       Meal[]
   sessions    Session[]
+  weightLogs  WeightLog[]
+  goals       Goal[]
 
   deletedReason String?
   deletedAt     DateTime?
@@ -163,6 +166,7 @@ model UserProfile {
   name String?
   age  Int?
   sex  Sex?
+  heightCm Int?
 
   photoId String?
   photo   MediaAsset? @relation("ProfilePhoto", fields: [photoId], references: [id])
@@ -171,4 +175,39 @@ model UserProfile {
   updatedAt DateTime @updatedAt
 
   @@index([photoId])
+}
+
+model WeightLog {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  date     DateTime // logical day (UTC date)
+  weightKg Float
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, date])
+  @@unique([userId, date])
+}
+
+enum ActivityLevel {
+  sedentary   // little or no exercise
+  light       // 1-3 days/week
+  moderate    // 3-5 days/week
+  active      // 6-7 days/week
+  very_active // hard exercise/physical job
+}
+
+model Goal {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetWeightKg Float
+  targetDate DateTime
+  activity  ActivityLevel @default(moderate)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@unique([userId])
 }

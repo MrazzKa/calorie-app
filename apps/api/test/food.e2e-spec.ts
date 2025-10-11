@@ -40,6 +40,21 @@ describe('Food e2e (live API)', () => {
     expect(list.body[0].id).toBe(up.body.mealId);
   });
 
+  it('POST /food/analyze rejects >10MB with 413', async () => {
+    await request(API).post('/auth/request-otp').send({ email: EMAIL }).expect(201);
+    const code = await redis.get(`otp:email:${EMAIL}:code`);
+
+    const v = await request(API).post('/auth/verify-otp').send({ email: EMAIL, code, deviceId: DEVICE }).expect(201);
+    const access = v.body.access as string;
+
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 1);
+    await request(API)
+      .post('/food/analyze')
+      .set('authorization', `Bearer ${access}`)
+      .attach('file', big, { filename: 'big.bin', contentType: 'application/octet-stream' })
+      .expect(413);
+  });
+
     afterAll(async () => {
         await redis.quit();
     });

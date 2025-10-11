@@ -14,6 +14,7 @@ import { UsersService } from './users.service';
 import { JwtService } from '../jwt/jwt.service';
 import { PrismaService } from '../prisma.service';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 
 @Controller('users')
 export class UsersController {
@@ -21,30 +22,26 @@ export class UsersController {
     private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly prisma: PrismaService,
-    @Inject('REDIS') private readonly redis: Redis,
+    @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
-  private extractSubFromAuthz(authz?: string): string {
+  private async extractSubFromAuthz(authz?: string): Promise<string> {
     const token = authz?.startsWith('Bearer ') ? authz.slice('Bearer '.length) : undefined;
     if (!token) throw new BadRequestException('access_required');
-    if ((this.jwt as any).verifyAccess) {
-      try {
-        const payload = (this.jwt as any).verifyAccess(token);
-        if (payload?.sub && typeof payload.sub === 'string') return payload.sub;
-      } catch { /* fall back */ }
-    }
+    
     try {
-      const [, p2] = token.split('.');
-      const json = Buffer.from(p2, 'base64url').toString('utf8');
-      const payload = JSON.parse(json);
-      if (payload?.sub && typeof payload.sub === 'string') return payload.sub;
-    } catch { /* ignore */ }
+      const payload = await this.jwt.verifyAccess(token);
+      if (payload?.sub) return String(payload.sub);
+    } catch (error) {
+      throw new BadRequestException('invalid_access');
+    }
+    
     throw new BadRequestException('invalid_access');
   }
 
   @Get('me')
   async me(@Headers('authorization') authz?: string) {
-    const sub = this.extractSubFromAuthz(authz);
+    const sub = await this.extractSubFromAuthz(authz);
     const u = await this.prisma.user.findUnique({
       where: { id: sub },
       include: { profile: { include: { photo: true } } }, // ← было UserProfile
@@ -73,7 +70,7 @@ export class UsersController {
     @Headers('authorization') authz?: string,
     @Body() body?: { name?: string; age?: number; sex?: 'male' | 'female' | 'other'; photoAssetId?: string },
   ) {
-    const sub = this.extractSubFromAuthz(authz);
+    const sub = await this.extractSubFromAuthz(authz);
     const prof = await this.users.updateProfile(sub, {
       name: body?.name,
       age: body?.age,
@@ -97,7 +94,7 @@ export class UsersController {
     @Headers('authorization') authz?: string,
     @Body() body?: { reason?: string },
   ) {
-    const sub = this.extractSubFromAuthz(authz);
+    const sub = await this.extractSubFromAuthz(authz);
     const u = await this.prisma.user.findUnique({ where: { id: sub } });
     if (!u) return;
     await this.users.deleteAccount({ userId: sub, reason: body?.reason, redis: this.redis });

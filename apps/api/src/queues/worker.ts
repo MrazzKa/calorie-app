@@ -1,11 +1,12 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from '../app.module';
-import { Process, Processor, OnQueueActive, OnQueueCompleted, OnQueueFailed } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
+// TODO: ensure @nestjs/bull is installed for decorators
+import { Process, Processor, OnQueueActive, OnQueueCompleted, OnQueueFailed } from '@nestjs/bull';
 import { PrismaService } from '../prisma.service';
 import { MediaService } from '../media/media.service';
 import { FoodAnalyzerService } from '../food/food-analyzer.service';
 import { ConfigService } from '@nestjs/config';
+import { WorkerModule } from './worker.module';
 
 interface AnalyzeJobData {
   mealId: string;
@@ -46,14 +47,8 @@ export class FoodAnalyzeProcessor {
         throw new Error(`Asset ${assetId} not found`);
       }
 
-      // Get the image buffer
-      const imageBuffer = await this.mediaService.getAssetBuffer(assetId, asset.ownerId);
-      
-      // Calculate image hash for caching
-      const imageHash = await this.mediaService.calculateImageHash(imageBuffer);
-      
       // Run actual AI analysis pipeline
-      const result = await this.foodAnalyzer.analyze(mealId, assetId);
+      await this.foodAnalyzer.analyze(mealId, assetId);
 
       const duration = Date.now() - startTime;
       this.logger.log(`Completed analysis for meal ${mealId} in ${duration}ms`);
@@ -93,10 +88,11 @@ export class FoodAnalyzeProcessor {
 
 // Standalone worker application
 async function bootstrapWorker() {
-  const app = await NestFactory.createApplicationContext(AppModule);
-  
+  const app = await NestFactory.createApplicationContext(WorkerModule);
+  const cfg = app.get(ConfigService);
+  const queueName = cfg.get<string>('FOOD_QUEUE') || process.env.FOOD_QUEUE || 'food:analyze';
   const logger = new Logger('WorkerBootstrap');
-  logger.log('Food analysis worker started');
+  logger.log(`Worker started (queue=${queueName})`);
   
   // Keep the application running
   process.on('SIGINT', async () => {

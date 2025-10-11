@@ -6,18 +6,12 @@ import type { LabelerProvider, VisionLabel } from './labeler.provider';
 @Injectable()
 export class OpenAILabeler implements LabelerProvider {
   private readonly logger = new Logger(OpenAILabeler.name);
-  private readonly openai: OpenAI;
+  private openai?: OpenAI;
+  private readonly apiKey?: string;
 
   constructor(private readonly configService: ConfigService) {
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is required');
-    }
-
-    this.openai = new OpenAI({
-      apiKey,
-      timeout: 20000,
-    });
+    this.apiKey = this.configService.get<string>('OPENAI_API_KEY') || undefined;
+    // defer client construction until first use
   }
 
   async extractLabels(image: Buffer): Promise<VisionLabel[]> {
@@ -26,6 +20,12 @@ export class OpenAILabeler implements LabelerProvider {
     try {
       this.logger.debug('Extracting labels using OpenAI');
       
+      if (!this.apiKey) {
+        throw new Error('OPENAI_API_KEY missing and OpenAI provider selected');
+      }
+      if (!this.openai) {
+        this.openai = new OpenAI({ apiKey: this.apiKey, timeout: 20000 });
+      }
       const base64Image = image.toString('base64');
       
       const response = await this.openai.chat.completions.create({

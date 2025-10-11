@@ -13,17 +13,20 @@ export class AuthService {
     private readonly mailer: MailerService,
   ) {}
 
-  // Redis инжектим из контроллера через setRedis
   private redis!: Redis;
-  setRedis(client: Redis) { this.redis = client; }
+  
+  setRedis(client: Redis) { 
+    this.redis = client; 
+  }
 
-  // ===== helpers =====
   private ttlLeft(expiresAt: Date) {
     return Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
   }
+  
   private hash(s: string) {
     return createHash('sha256').update(s).digest('hex');
   }
+  
   private otpHash(s: string) {
     return createHash('sha256').update(s).digest('hex');
   }
@@ -59,7 +62,6 @@ export class AuthService {
     return { access, refresh, jti };
   }
 
-  // ===== OTP =====
   async requestOtp(email: string, ip?: string) {
     await this.rateLimit(`otp:${email}:count:1m`, 5, 60);
     await this.rateLimit(`otp:${email}:count:1d`, 20, 86400);
@@ -95,7 +97,6 @@ export class AuthService {
     return this.newSessionAndTokens(user.id, user.role, deviceId, ua, ip);
   }
 
-  // ===== Magic link =====
   async requestMagic(email: string) {
     await this.rateLimit(`magic:${email}:count:1m`, 5, 60);
     await this.rateLimit(`magic:${email}:count:1d`, 20, 86400);
@@ -104,12 +105,8 @@ export class AuthService {
     const opaque = randomBytes(24).toString('base64url');
     const h = this.hash(opaque);
 
-    // одноразовый хэш -> email
     await this.redis.setex(`magic:${h}`, ttl, email);
-    // для e2e/debug сохраняем plaintext токен по email
     await this.redis.setex(`magic:latest:${email.toLowerCase()}`, ttl, opaque);
-
-    // ссылка в письмо (в e2e не используется, но пусть будет валидной)
     const appLinkDomain = process.env.APP_LINK_DOMAIN || process.env.APP_URL || 'http://localhost:3000';
     const url = `${appLinkDomain}/v1/auth/magic-exchange?t=${opaque}`;
 
@@ -122,7 +119,6 @@ export class AuthService {
     return { ok: true };
   }
 
-  // dev/debug для e2e: вытянуть последний plaintext токен
   async debugLatestMagic(emailRaw: string) {
     const email = (emailRaw || '').trim().toLowerCase();
     const t = await this.redis.get(`magic:latest:${email}`);

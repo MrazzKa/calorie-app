@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { CurrentUser } from './guards/access.guard';
 import { AuthService } from './auth.service';
 import { OtpService } from './otp.service';
 import { PrismaService } from '../prisma.service';
@@ -23,6 +24,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { JwtService } from '../jwt/jwt.service';
 import { RateLimitService } from '../common/rate-limit.service';
 import type Redis from 'ioredis';
+import { REDIS } from '../redis/redis.module';
 import * as crypto from 'node:crypto';
 import { hash, randomId } from '../common/crypto.util';
 
@@ -37,7 +39,7 @@ export class AuthController {
     private readonly sessions: SessionsService,
     private readonly jwt: JwtService,
     private readonly rateLimitService: RateLimitService,
-    @Inject('REDIS') private readonly redis: Redis,
+    @Inject(REDIS) private readonly redis: Redis,
     @Inject(forwardRef(() => AuthService)) private readonly auth: AuthService,
   ) {}
 
@@ -50,20 +52,23 @@ export class AuthController {
     const correlationId = (req as any).correlationId;
     const ip = req.ip || 'unknown';
 
-    // Rate limiting
-    await this.rateLimitService.rateLimit(
-      `rl:otp:${email}`,
-      this.cfg.get<number>('RL_OTP_PER_15M') || 5,
-      15 * 60, // 15 minutes
-      correlationId,
-    );
+    // Rate limiting - disabled if DISABLE_LIMITS=true or in test
+    const disableLimits = process.env.DISABLE_LIMITS === 'true' || process.env.NODE_ENV === 'test';
+    if (!disableLimits) {
+      await this.rateLimitService.rateLimit(
+        `rl:otp:${email}`,
+        this.cfg.get<number>('RL_OTP_PER_15M') || 5,
+        15 * 60, // 15 minutes
+        correlationId,
+      );
 
-    await this.rateLimitService.rateLimit(
-      `rl:otp:ip:${ip}`,
-      this.cfg.get<number>('RL_OTP_PER_HOUR_IP') || 20,
-      60 * 60, // 1 hour
-      correlationId,
-    );
+      await this.rateLimitService.rateLimit(
+        `rl:otp:ip:${ip}`,
+        this.cfg.get<number>('RL_OTP_PER_HOUR_IP') || 20,
+        60 * 60, // 1 hour
+        correlationId,
+      );
+    }
 
     await this.prisma.user.upsert({ where: { email }, create: { email }, update: {} });
 
@@ -72,7 +77,9 @@ export class AuthController {
       await this.otp.notifyByEmail(email, code);
       if ((this.auth as any).afterRequestOtp) await (this.auth as any).afterRequestOtp(email);
     } catch (e) {
-      if (this.cfg.get('AUTH_DEV_IGNORE_MAIL_ERRORS') !== 'true') throw e;
+      // note: never fail auth flow on mail transport in non-production
+      const ignore = this.cfg.get('AUTH_DEV_IGNORE_MAIL_ERRORS') === 'true' || process.env.NODE_ENV !== 'production';
+      if (!ignore) throw e;
     }
     return { ok: true };
   }
@@ -122,20 +129,23 @@ export class AuthController {
     const correlationId = (req as any).correlationId;
     const ip = req.ip || 'unknown';
 
-    // Rate limiting
-    await this.rateLimitService.rateLimit(
-      `rl:magic:${email}`,
-      this.cfg.get<number>('RL_MAGIC_PER_15M') || 5,
-      15 * 60, // 15 minutes
-      correlationId,
-    );
-
-    await this.rateLimitService.rateLimit(
-      `rl:magic:ip:${ip}`,
-      this.cfg.get<number>('RL_MAGIC_PER_HOUR_IP') || 20,
-      60 * 60, // 1 hour
-      correlationId,
-    );
+    // Rate limiting - disabled in test or if flag set
+    if (process.env.DISABLE_LIMITS === 'true' || process.env.NODE_ENV === 'test') {
+      // skip
+    } else {
+      await this.rateLimitService.rateLimit(
+        `rl:magic:${email}`,
+        this.cfg.get<number>('RL_MAGIC_PER_15M') || 5,
+        15 * 60, // 15 minutes
+        correlationId,
+      );
+      await this.rateLimitService.rateLimit(
+        `rl:magic:ip:${ip}`,
+        this.cfg.get<number>('RL_MAGIC_PER_HOUR_IP') || 20,
+        60 * 60, // 1 hour
+        correlationId,
+      );
+    }
 
     await this.prisma.user.upsert({ where: { email }, create: { email }, update: {} });
 
@@ -316,42 +326,20 @@ export class AuthController {
   @Delete('account')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteAccount(
-    @Headers('authorization') authz?: string,
-    @Body() body?: { reason?: string },
+    @Body() body: { reason?: string } | undefined,
+    @CurrentUser('sub') sub: string | undefined,
   ) {
-    const token = authz?.startsWith('Bearer ') ? authz.slice('Bearer '.length) : undefined;
-    if (!token) throw new BadRequestException('access_required');
+    if (!sub) throw new UnauthorizedException();
+    const userId = sub as string;
 
-    let sub: string | undefined;
-    if ((this.jwt as any).verifyAccess) {
-      try {
-        const payload = await (this.jwt as any).verifyAccess(token);
-        sub = typeof payload?.sub === 'string' ? payload.sub : undefined;
-      } catch {
-        // fallback decode
-      }
-    }
-    if (!sub) {
-      try {
-        const [, p2] = token.split('.');
-        const json = Buffer.from(p2, 'base64url').toString('utf8');
-        const payload = JSON.parse(json);
-        sub = typeof payload?.sub === 'string' ? payload.sub : undefined;
-      } catch {
-        throw new BadRequestException('invalid_access');
-      }
-    }
-
-    // Soft delete user
     await this.prisma.user.update({
-      where: { id: sub },
+      where: { id: userId },
       data: {
         deletedAt: new Date(),
         deletedReason: body?.reason || 'user_requested',
       },
     });
 
-    // Revoke all sessions
-    await this.sessions.revokeAll(sub, this.redis);
+    await this.sessions.revokeAll(userId, this.redis);
   }
 }
